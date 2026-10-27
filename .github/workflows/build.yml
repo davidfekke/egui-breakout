@@ -1,0 +1,125 @@
+name: Build
+
+# Runs on a tag push (e.g. `git tag v0.1.0 && git push --tags`) and on demand
+# from the Actions tab. Windows and Linux are built on runners matching their
+# CPU architecture, because their native dependencies (ALSA, winit's X11/Wayland
+# glue, the Windows SDK) are painful to cross-compile. macOS is the exception:
+# the Apple SDK links both architectures from one runner.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed by the release job
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BIN: egui-breakout
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: brick-break-windows-x64.zip
+          - label: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: brick-break-windows-arm64.zip
+          - label: linux-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: brick-break-linux-x64.tar.gz
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: brick-break-linux-arm64.tar.gz
+          - label: macos-x64
+            # The Intel macOS runner image is legacy (macos-15-intel); the Apple
+            # SDK links x86_64 binaries fine from an arm64 runner, so cross
+            # build there instead. Swap in `macos-15-intel` if you prefer native.
+            os: macos-15
+            target: x86_64-apple-darwin
+            archive: brick-break-macos-x64.zip
+          # Apple Silicon. Most Macs sold since 2020 are arm64, so you probably
+          # want this too (or a universal binary, see README).
+          - label: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            archive: brick-break-macos-arm64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      # rodio -> cpal -> alsa-sys needs the ALSA headers at link time. winit
+      # itself loads X11/Wayland at runtime, but the headers keep builds happy.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/$env:BIN.exe" dist/brick-break.exe
+          Copy-Item README.md dist/README.md
+          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.archive }}" -Force
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          install -m 755 "target/${{ matrix.target }}/release/${BIN}" dist/brick-break
+          cp README.md dist/
+          tar -czf "${{ matrix.archive }}" -C dist brick-break README.md
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bash scripts/make-macos-app.sh "${{ matrix.target }}"
+          # ditto keeps the executable bit and the bundle layout intact.
+          ditto -c -k --sequesterRsrc --keepParent "dist/Brick Break.app" "${{ matrix.archive }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
