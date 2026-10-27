@@ -37,8 +37,8 @@ own toolchain. Supported targets:
 packs `brick-break-windows-x64.zip`, `brick-break-windows-arm64.zip`,
 `brick-break-linux-x64.tar.gz`, `brick-break-linux-arm64.tar.gz` and
 `brick-break-macos-x64.zip` (plus an Apple Silicon build, which most modern Macs
-need). Pushing a `v*` tag attaches the archives to a GitHub release; otherwise
-run it by hand from the Actions tab.
+need). Pushing a release tag (either `1.2.3` or `v1.2.3`) attaches the archives
+to a GitHub release; otherwise run it by hand from the Actions tab.
 
 ```sh
 git init && git add . && git commit -m "Brick / Break"
